@@ -16,6 +16,8 @@
 
 package zio
 
+import zio.FiberRef.UnsafeHandle
+
 /**
  * Fiber's counterpart for Java's `ThreadLocal`. Value is automatically propagated
  * to child on fork and merged back in after joining child.
@@ -90,12 +92,25 @@ final class FiberRef[A](private[zio] val initial: A) extends Serializable {
     (result, result)
   }
 
+  /**
+   * Returns a handle that can be used to read the value of this `FiberRef` from side effecting code.
+   *
+   * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
+   */
+  final def getUnsafeHandle: UIO[UnsafeHandle[A]] =
+    UIO {
+      new UnsafeHandle[A] { def get = initial }
+    }
 }
 
 object FiberRef extends Serializable {
+  trait UnsafeHandle[A] {
+    def get: A
+  }
 
   /**
    * Creates a new `FiberRef` with given initial value.
    */
   def make[A](initialValue: A): UIO[FiberRef[A]] = new ZIO.FiberRefNew(initialValue)
 }
+
