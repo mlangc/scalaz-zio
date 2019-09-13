@@ -16,6 +16,10 @@
 
 package zio
 
+import java.util.concurrent.atomic.AtomicReference
+
+import zio.FiberRef.UnsafeHandle
+
 /**
  * Fiber's counterpart for Java's `ThreadLocal`. Value is automatically propagated
  * to child on fork and merged back in after joining child.
@@ -46,6 +50,8 @@ package zio
  * @tparam A
  */
 final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (A, A) => A) extends Serializable {
+  private[zio] val threadLocalRef                           = new AtomicReference[ThreadLocal[A]](null)
+  private[zio] def maybeThreadLocal: Option[ThreadLocal[A]] = Option(threadLocalRef.get)
 
   /**
    * Reads the value associated with the current fiber. Returns initial value if
@@ -103,9 +109,40 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
     (result, result)
   }
 
+  /**
+   * Returns a handle that can be used to read the value of this `FiberRef` from side effecting code.
+   *
+   * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
+   */
+  final def getUnsafeHandle: UIO[UnsafeHandle[A]] =
+    get >>= { a =>
+      UIO {
+        val threadLocal = getThreadLocal
+        threadLocal.set(a)
+        new UnsafeHandle[A] {
+          def get(): A = threadLocal.get()
+        }
+      }
+    }
+
+  private[this] def getThreadLocal: ThreadLocal[A] = {
+    val candidate = threadLocalRef.get()
+    if (candidate ne null) candidate
+    else {
+      val newCandiate = new ThreadLocal[A] {
+        override def initialValue(): A = initial
+      }
+
+      if (!threadLocalRef.compareAndSet(null, newCandiate)) getThreadLocal
+      else newCandiate
+    }
+  }
 }
 
 object FiberRef extends Serializable {
+  trait UnsafeHandle[A] {
+    def get(): A
+  }
 
   /**
    * Creates a new `FiberRef` with given initial value.

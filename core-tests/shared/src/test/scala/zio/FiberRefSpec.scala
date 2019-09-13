@@ -237,10 +237,66 @@ object FiberRefSpec
           testM("nothing gets inherited when racing failures with raceAll") {
             for {
               fiberRef <- FiberRef.make(initial)
-              looser   = fiberRef.set(update) *> ZIO.fail("darn")
-              _        <- looser.raceAll(Iterable.fill(63)(looser)).orElse(ZIO.unit)
-              value    <- fiberRef.get
+              looser = fiberRef.set(update) *> ZIO.fail("darn")
+              _ <- looser.raceAll(Iterable.fill(63)(looser)).orElse(ZIO.unit)
+              value <- fiberRef.get
             } yield assert(value, equalTo(initial))
+          },
+          testM("an unsafe handle is initialized and updated properly") {
+            for {
+              fiberRef <- FiberRef.make(initial)
+              handle   <- fiberRef.getUnsafeHandle
+              value1   <- UIO(handle.get)
+              _        <- fiberRef.set(update)
+              value2   <- UIO(handle.get)
+            } yield assert(value1, equalTo(initial)) && assert(value2, equalTo(update))
+          },
+          testM("unsafe handles work properly when initialized in a race") {
+            for {
+              fiberRef   <- FiberRef.make(initial)
+              initHandle = fiberRef.getUnsafeHandle
+              handle     <- ZIO.raceAll(initHandle, Iterable.fill(64)(initHandle))
+              value1     <- UIO(handle.get)
+              doUpdate   = fiberRef.set(update)
+              _          <- ZIO.raceAll(doUpdate, Iterable.fill(64)(doUpdate))
+              value2     <- UIO(handle.get)
+            } yield assert(value1, equalTo(initial)) && assert(value2, equalTo(update))
+          },
+          testM("unsafe handles work properly when accessed concurrently") {
+            for {
+              fiberRef  <- FiberRef.make(0)
+              setAndGet = (value: Int) => fiberRef.set(value) *> fiberRef.getUnsafeHandle.flatMap(h => UIO(h.get))
+              n         = 64
+              fiber     <- ZIO.forkAll(1.to(n).map(setAndGet))
+              values    <- fiber.join
+            } yield assert(values, equalTo(1.to(n).toList))
+          },
+          testM("unsafe handles don't see updates from other fibers") {
+            for {
+              fiberRef <- FiberRef.make(initial)
+              handle   <- fiberRef.getUnsafeHandle
+              value1   <- UIO(handle.get)
+              n        = 64
+              fiber    <- ZIO.forkAll(Iterable.fill(n)(fiberRef.set(update)))
+              _        <- fiber.await
+              value2   <- UIO(handle.get)
+            } yield assert(value1, equalTo(initial)) && assert(value2, equalTo(initial))
+          },
+          testM("unsafe handles keep their values if there are async boundaries") {
+            for {
+              fiberRef <- FiberRef.make(0)
+
+              test = (i: Int) =>
+                for {
+                  handle <- fiberRef.getUnsafeHandle
+                  _      <- fiberRef.set(i)
+                  _      <- ZIO.yieldNow
+                  value  <- UIO(handle.get)
+                } yield assert(value, equalTo(i))
+
+              n       = 64
+              results <- ZIO.reduceAllPar(test(1), 2.to(n).map(test))(_ && _)
+            } yield results
           }
         )
       )
