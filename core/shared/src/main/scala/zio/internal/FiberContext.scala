@@ -23,9 +23,9 @@ import zio.internal.FiberContext.{ FiberRefLocals, SuperviseStatus }
 import zio.internal.stacktracer.ZTraceElement
 import zio.internal.tracing.ZIOFn
 import zio.{ Cause, _ }
-
 import scala.annotation.{ switch, tailrec }
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 
 /**
  * An implementation of Fiber that maintains context necessary for evaluation.
@@ -235,6 +235,11 @@ private[zio] final class FiberContext[E, A](
 
         kTrace
       } else null
+
+    localsAsScala.foreach {
+      case (fiberRef, value) =>
+        fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
+    }
 
     while (curZio ne null) {
       try {
@@ -512,6 +517,7 @@ private[zio] final class FiberContext[E, A](
                   val oldValue           = Option(fiberRefLocals.get(zio.fiberRef))
                   val (result, newValue) = zio.f(oldValue.getOrElse(zio.fiberRef.initial))
                   fiberRefLocals.put(zio.fiberRef, newValue)
+                  zio.fiberRef.maybeThreadLocal.foreach(_.set(newValue))
 
                   curZio = nextInstr(result)
 
@@ -535,6 +541,10 @@ private[zio] final class FiberContext[E, A](
         case t: Throwable =>
           curZio = if (platform.fatal(t)) platform.reportFatal(t) else ZIO.die(t)
       }
+    }
+
+    localsAsScala.keys.foreach { fiberRef =>
+      fiberRef.maybeThreadLocal.foreach(_.remove())
     }
   }
 
@@ -621,7 +631,7 @@ private[zio] final class FiberContext[E, A](
   final def poll: UIO[Option[Exit[E, A]]] = ZIO.effectTotal(poll0)
 
   final def inheritFiberRefs: UIO[Unit] = UIO.effectSuspendTotal {
-    val locals = fiberRefLocals.asScala: @silent("JavaConverters")
+    val locals = localsAsScala
     if (locals.isEmpty) UIO.unit
     else
       UIO.foreach_(locals) {
@@ -629,6 +639,9 @@ private[zio] final class FiberContext[E, A](
           fiberRef.asInstanceOf[FiberRef[Any]].set(value)
       }
   }
+
+  @silent("JavaConverters")
+  private[this] final def localsAsScala: mutable.Map[FiberRef[_], Any] = fiberRefLocals.asScala
 
   private[this] final def newWeakSet[A]: Set[A] =
     Collections.newSetFromMap[A](platform.newWeakHashMap[A, java.lang.Boolean]())
