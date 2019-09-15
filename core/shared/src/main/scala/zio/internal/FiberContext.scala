@@ -237,9 +237,11 @@ private[zio] final class FiberContext[E, A](
         kTrace
       } else null
 
-    localsAsScala.foreach {
-      case (fiberRef, value) =>
-        fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
+    if (!fiberRefLocals.isEmpty) {
+      localsAsScala.foreach {
+        case (fiberRef, value) =>
+          fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
+      }
     }
 
     while (curZio ne null) {
@@ -544,8 +546,10 @@ private[zio] final class FiberContext[E, A](
       }
     }
 
-    localsAsScala.keys.foreach { fiberRef =>
-      fiberRef.maybeThreadLocal.foreach(_.remove())
+    if (!fiberRefLocals.isEmpty) {
+      localsAsScala.keys.foreach { fiberRef =>
+        fiberRef.maybeThreadLocal.foreach(_.remove())
+      }
     }
   }
 
