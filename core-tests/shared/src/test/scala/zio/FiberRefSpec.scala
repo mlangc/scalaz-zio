@@ -237,9 +237,9 @@ object FiberRefSpec
           testM("nothing gets inherited when racing failures with raceAll") {
             for {
               fiberRef <- FiberRef.make(initial)
-              looser = fiberRef.set(update) *> ZIO.fail("darn")
-              _ <- looser.raceAll(Iterable.fill(63)(looser)).orElse(ZIO.unit)
-              value <- fiberRef.get
+              looser   = fiberRef.set(update) *> ZIO.fail("darn")
+              _        <- looser.raceAll(Iterable.fill(63)(looser)).orElse(ZIO.unit)
+              value    <- fiberRef.get
             } yield assert(value, equalTo(initial))
           },
           testM("an unsafe handle is initialized and updated properly") {
