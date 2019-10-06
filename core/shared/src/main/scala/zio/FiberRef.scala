@@ -115,26 +115,34 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
    * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
    */
   final def getUnsafeHandle: UIO[UnsafeHandle[A]] =
-    get >>= { a =>
-      UIO {
-        val threadLocal = getThreadLocal
+    get.flatMap { a =>
+      ZIO.effectTotal {
+        val (threadLocal, isNew) = getThreadLocal
         threadLocal.set(a)
         new UnsafeHandle[A] {
           def get(): A = threadLocal.get()
-        }
+        } -> isNew
+      }.flatMap {
+        case (handle, isNew) =>
+          if (!isNew) ZIO.succeed(handle)
+          else
+            ZIO.effectTotal {
+              UnsafelyExposedFiberRefs.register(this)
+              handle
+            }
       }
     }
 
-  private[this] def getThreadLocal: ThreadLocal[A] = {
+  private[this] def getThreadLocal: (ThreadLocal[A], Boolean) = {
     val candidate = threadLocalRef.get()
-    if (candidate ne null) candidate
+    if (candidate ne null) (candidate, false)
     else {
-      val newCandiate = new ThreadLocal[A] {
+      val newCandidate = new ThreadLocal[A] {
         override def initialValue(): A = initial
       }
 
-      if (!threadLocalRef.compareAndSet(null, newCandiate)) getThreadLocal
-      else newCandiate
+      if (!threadLocalRef.compareAndSet(null, newCandidate)) getThreadLocal
+      else (newCandidate, true)
     }
   }
 }

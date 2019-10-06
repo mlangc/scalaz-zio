@@ -23,6 +23,7 @@ import zio.internal.FiberContext.{ FiberRefLocals, SuperviseStatus }
 import zio.internal.stacktracer.ZTraceElement
 import zio.internal.tracing.ZIOFn
 import zio.{ Cause, _ }
+
 import scala.annotation.{ switch, tailrec }
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -237,11 +238,11 @@ private[zio] final class FiberContext[E, A](
         kTrace
       } else null
 
-    if (!fiberRefLocals.isEmpty) {
-      localsAsScala.foreach {
-        case (fiberRef, value) =>
-          fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
-      }
+    def foreachUnsafelyExposedFiberRef(f: (FiberRef[_], Any) => Unit): Unit =
+      UnsafelyExposedFiberRefs.foreach(fiberRefLocals)(f)
+
+    foreachUnsafelyExposedFiberRef { (fiberRef, value) =>
+      fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
     }
 
     while (curZio ne null) {
@@ -546,10 +547,8 @@ private[zio] final class FiberContext[E, A](
       }
     }
 
-    if (!fiberRefLocals.isEmpty) {
-      localsAsScala.keys.foreach { fiberRef =>
-        fiberRef.maybeThreadLocal.foreach(_.remove())
-      }
+    foreachUnsafelyExposedFiberRef { (fiberRef, _) =>
+      fiberRef.maybeThreadLocal.foreach(_.remove())
     }
   }
 
