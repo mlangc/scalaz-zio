@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 import zio.FiberRef.UnsafeHandle
 
+import scala.annotation.tailrec
+
 /**
  * Fiber's counterpart for Java's `ThreadLocal`. Value is automatically propagated
  * to child on fork and merged back in after joining child.
@@ -114,13 +116,13 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
    *
    * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
    */
-  final def getUnsafeHandle: UIO[UnsafeHandle[A]] =
+  final def unsafeHandle: UIO[UnsafeHandle[A]] =
     get.flatMap { a =>
       ZIO.effectTotal {
         val (threadLocal, isNew) = getThreadLocal
         threadLocal.set(a)
         new UnsafeHandle[A] {
-          def get(): A = threadLocal.get()
+          def unsafeGet(): A = threadLocal.get()
         } -> isNew
       }.flatMap {
         case (handle, isNew) =>
@@ -133,6 +135,7 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
       }
     }
 
+  @tailrec
   private[this] def getThreadLocal: (ThreadLocal[A], Boolean) = {
     val candidate = threadLocalRef.get()
     if (candidate ne null) (candidate, false)
@@ -149,7 +152,7 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
 
 object FiberRef extends Serializable {
   trait UnsafeHandle[A] {
-    def get(): A
+    def unsafeGet(): A
   }
 
   /**
