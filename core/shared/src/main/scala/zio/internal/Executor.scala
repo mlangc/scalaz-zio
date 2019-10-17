@@ -106,4 +106,7 @@ object Executor extends DefaultExecutors with Serializable {
 
       def metrics = None
     }
+
+  final def fromExecutorService(yieldOpCount: Int)(service: ExecutorService): Executor =
+    fromExecutionContext(yieldOpCount)(ExecutionContext.fromExecutorService(service))
 }
