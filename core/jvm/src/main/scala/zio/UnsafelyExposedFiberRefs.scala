@@ -10,21 +10,21 @@ import java.util.{
 }
 
 private[zio] object UnsafelyExposedFiberRefs {
-  private[this] val refs: JSet[FiberRef[_]] =
+  private[this] val refs: JSet[FiberRef[Any]] =
     JCollections.synchronizedSet {
       JCollections.newSetFromMap {
-        new JWeakHashMap[FiberRef[_], JBoolean]()
+        new JWeakHashMap[FiberRef[Any], JBoolean]()
       }
     }
 
-  def register(fiberRef: FiberRef[_]): Unit = {
+  def register(fiberRef: FiberRef[Any]): Unit = {
     refs.add(fiberRef)
     ()
   }
 
-  def foreach(fiberRefs: JMap[FiberRef[_], Any])(f: (FiberRef[_], Any) => Unit): Unit =
+  def foreach(fiberRefs: JMap[FiberRef[Any], Any])(f: (FiberRef[Any], Any) => Unit): Unit =
     if (!refs.isEmpty && !fiberRefs.isEmpty) {
-      val refsOfInterest = new JHashSet[FiberRef[_]](refs)
+      val refsOfInterest = new JHashSet[FiberRef[Any]](refs)
       refsOfInterest.retainAll(fiberRefs.keySet())
 
       val iter = refsOfInterest.iterator()

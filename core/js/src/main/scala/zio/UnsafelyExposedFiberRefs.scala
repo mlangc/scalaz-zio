@@ -8,12 +8,12 @@ private[zio] object UnsafelyExposedFiberRefs {
   @volatile
   private[this] var inUse: Boolean = false
 
-  def register(@silent("never used") fiberRef: FiberRef[_]): Unit = {
+  def register(@silent("never used") fiberRef: FiberRef[Any]): Unit = {
     inUse = true
     ()
   }
 
-  def foreach(fiberRefs: JMap[FiberRef[_], Any])(f: (FiberRef[_], Any) => Unit): Unit =
+  def foreach(fiberRefs: JMap[FiberRef[Any], Any])(f: (FiberRef[Any], Any) => Unit): Unit =
     if (!inUse || fiberRefs.isEmpty) ()
     else {
       val iter = fiberRefs.entrySet().iterator()

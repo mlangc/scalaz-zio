@@ -238,11 +238,11 @@ private[zio] final class FiberContext[E, A](
         kTrace
       } else null
 
-    def foreachUnsafelyExposedFiberRef(f: (FiberRef[_], Any) => Unit): Unit =
+    def foreachUnsafelyExposedFiberRef(f: (FiberRef[Any], Any) => Unit): Unit =
       UnsafelyExposedFiberRefs.foreach(fiberRefLocals)(f)
 
     foreachUnsafelyExposedFiberRef { (fiberRef, value) =>
-      fiberRef.maybeThreadLocal.foreach(_.asInstanceOf[ThreadLocal[Any]].set(value))
+      fiberRef.maybeThreadLocal.foreach(_.set(value))
     }
 
     while (curZio ne null) {
@@ -646,7 +646,7 @@ private[zio] final class FiberContext[E, A](
   }
 
   @silent("JavaConverters")
-  private[this] final def localsAsScala: mutable.Map[FiberRef[_], Any] = fiberRefLocals.asScala
+  private[this] final def localsAsScala: mutable.Map[FiberRef[Any], Any] = fiberRefLocals.asScala
 
   private[this] final def newWeakSet[A]: Set[A] =
     Collections.newSetFromMap[A](platform.newWeakHashMap[A, java.lang.Boolean]())

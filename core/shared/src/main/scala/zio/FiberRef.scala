@@ -129,7 +129,7 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
           if (!isNew) ZIO.succeed(handle)
           else
             ZIO.effectTotal {
-              UnsafelyExposedFiberRefs.register(this)
+              UnsafelyExposedFiberRefs.register(this.asInstanceOf[FiberRef[Any]])
               handle
             }
       }
