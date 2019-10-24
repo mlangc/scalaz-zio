@@ -247,9 +247,11 @@ object FiberRefSpec
               fiberRef <- FiberRef.make(initial)
               handle   <- fiberRef.unsafeHandle
               value1   <- UIO(handle.unsafeGet)
-              _        <- fiberRef.set(update)
+              _        <- fiberRef.set(update1)
               value2   <- UIO(handle.unsafeGet)
-            } yield assert(value1, equalTo(initial)) && assert(value2, equalTo(update))
+              _        <- UIO(handle.unsafeSet(update2))
+              value3   <- fiberRef.get
+            } yield assert((value1, value2, value3), equalTo((initial, update1, update2)))
           },
           testM("unsafe handles work properly when initialized in a race") {
             for {
@@ -264,11 +266,12 @@ object FiberRefSpec
           },
           testM("unsafe handles work properly when accessed concurrently") {
             for {
-              fiberRef  <- FiberRef.make(0)
-              setAndGet = (value: Int) => fiberRef.set(value) *> fiberRef.unsafeHandle.flatMap(h => UIO(h.unsafeGet))
-              n         = 64
-              fiber     <- ZIO.forkAll(1.to(n).map(setAndGet))
-              values    <- fiber.join
+              fiberRef <- FiberRef.make(0)
+              setAndGet = (value: Int) =>
+                setRefOrHandle(fiberRef, value) *> fiberRef.unsafeHandle.flatMap(h => UIO(h.unsafeGet))
+              n      = 64
+              fiber  <- ZIO.forkAll(1.to(n).map(setAndGet))
+              values <- fiber.join
             } yield assert(values, equalTo(1.to(n).toList))
           },
           testM("unsafe handles don't see updates from other fibers") {
@@ -277,7 +280,7 @@ object FiberRefSpec
               handle   <- fiberRef.unsafeHandle
               value1   <- UIO(handle.unsafeGet)
               n        = 64
-              fiber    <- ZIO.forkAll(Iterable.fill(n)(fiberRef.set(update)))
+              fiber    <- ZIO.forkAll(Iterable.fill(n)(fiberRef.set(update).race(UIO(handle.unsafeSet(update)))))
               _        <- fiber.await
               value2   <- UIO(handle.unsafeGet)
             } yield assert(value1, equalTo(initial)) && assert(value2, equalTo(initial))
@@ -289,7 +292,7 @@ object FiberRefSpec
               test = (i: Int) =>
                 for {
                   handle <- fiberRef.unsafeHandle
-                  _      <- fiberRef.set(i)
+                  _      <- setRefOrHandle(fiberRef, handle, i)
                   _      <- ZIO.yieldNow
                   value  <- UIO(handle.unsafeGet)
                 } yield assert(value, equalTo(i))
@@ -307,4 +310,12 @@ object FiberRefSpecUtil {
   val looseTimeAndCpu: ZIO[Live[Clock], Nothing, (Int, Int)] = Live.live {
     ZIO.yieldNow.repeat(Schedule.spaced(Duration.fromNanos(1)) && Schedule.recurs(100))
   }
+
+  def setRefOrHandle(fiberRef: FiberRef[Int], value: Int): UIO[Unit] =
+    if (value % 2 == 0) fiberRef.set(value)
+    else fiberRef.unsafeHandle.flatMap(h => UIO(h.unsafeSet(value)))
+
+  def setRefOrHandle(fiberRef: FiberRef[Int], handle: FiberRef.UnsafeHandle[Int], value: Int): UIO[Unit] =
+    if (value % 2 == 0) fiberRef.set(value)
+    else UIO(handle.unsafeSet(value))
 }

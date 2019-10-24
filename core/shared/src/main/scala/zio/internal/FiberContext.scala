@@ -39,7 +39,7 @@ private[zio] final class FiberContext[E, A](
   startSStatus: SuperviseStatus,
   parentTrace: Option[ZTrace],
   initialTracingStatus: Boolean,
-  fiberRefLocals: FiberRefLocals
+  private[zio] val fiberRefLocals: FiberRefLocals
 ) extends Fiber[E, A] {
   import java.util.{ Collections, Set }
 
@@ -213,6 +213,9 @@ private[zio] final class FiberContext[E, A](
    * @param io0 The `IO` to evaluate on the fiber.
    */
   final def evaluateNow(io0: IO[E, Any]): Unit = {
+    if (UnsafelyExposedFiberRefs.used)
+      FiberContext.current.set(this)
+
     // Do NOT accidentally capture `curZio` in a closure, or Scala will wrap
     // it in `ObjectRef` and performance will plummet.
     var curZio: IO[E, Any] = io0
@@ -237,13 +240,6 @@ private[zio] final class FiberContext[E, A](
 
         kTrace
       } else null
-
-    def foreachUnsafelyExposedFiberRef(f: (FiberRef[Any], Any) => Unit): Unit =
-      UnsafelyExposedFiberRefs.foreach(fiberRefLocals)(f)
-
-    foreachUnsafelyExposedFiberRef { (fiberRef, value) =>
-      fiberRef.maybeThreadLocal.foreach(_.set(value))
-    }
 
     while (curZio ne null) {
       try {
@@ -525,6 +521,10 @@ private[zio] final class FiberContext[E, A](
 
                   curZio = nextInstr(result)
 
+                case ZIO.Tags.SetCurrentFiberContext =>
+                  FiberContext.current.set(this)
+
+                  curZio = nextInstr(())
               }
             }
           } else {
@@ -547,9 +547,8 @@ private[zio] final class FiberContext[E, A](
       }
     }
 
-    foreachUnsafelyExposedFiberRef { (fiberRef, _) =>
-      fiberRef.maybeThreadLocal.foreach(_.remove())
-    }
+    if (UnsafelyExposedFiberRefs.used)
+      FiberContext.current.remove()
   }
 
   private[this] final def lock(executor: Executor): UIO[Unit] =
@@ -825,6 +824,8 @@ private[zio] final class FiberContext[E, A](
 }
 private[zio] object FiberContext {
   val fiberCounter = new AtomicLong(0)
+
+  val current = new ThreadLocal[FiberContext[_, _]]
 
   sealed trait FiberStatus extends Serializable with Product
   object FiberStatus {

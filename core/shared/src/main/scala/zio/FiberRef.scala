@@ -19,8 +19,7 @@ package zio
 import java.util.concurrent.atomic.AtomicReference
 
 import zio.FiberRef.UnsafeHandle
-
-import scala.annotation.tailrec
+import zio.internal.FiberContext
 
 /**
  * Fiber's counterpart for Java's `ThreadLocal`. Value is automatically propagated
@@ -52,6 +51,7 @@ import scala.annotation.tailrec
  * @tparam A
  */
 final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (A, A) => A) extends Serializable {
+  self =>
   private[zio] val threadLocalRef                           = new AtomicReference[ThreadLocal[A]](null)
   private[zio] def maybeThreadLocal: Option[ThreadLocal[A]] = Option(threadLocalRef.get)
 
@@ -117,42 +117,29 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
    * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
    */
   final def unsafeHandle: UIO[UnsafeHandle[A]] =
-    get.flatMap { a =>
-      ZIO.effectTotal {
-        val (threadLocal, isNew) = getThreadLocal
-        threadLocal.set(a)
-        new UnsafeHandle[A] {
-          def unsafeGet(): A = threadLocal.get()
-        } -> isNew
-      }.flatMap {
-        case (handle, isNew) =>
-          if (!isNew) ZIO.succeed(handle)
-          else
-            ZIO.effectTotal {
-              UnsafelyExposedFiberRefs.register(this.asInstanceOf[FiberRef[Any]])
-              handle
-            }
-      }
-    }
+    ZIO.SetCurrentFiberContext *> ZIO.effectTotal {
 
-  @tailrec
-  private[this] def getThreadLocal: (ThreadLocal[A], Boolean) = {
-    val candidate = threadLocalRef.get()
-    if (candidate ne null) (candidate, false)
-    else {
-      val newCandidate = new ThreadLocal[A] {
-        override def initialValue(): A = initial
+      val handle = new UnsafeHandle[A] {
+        def unsafeGet(): A =
+          Option(FiberContext.current.get()).flatMap { fiberContext =>
+            Option(fiberContext.fiberRefLocals.get(self))
+          }.map(_.asInstanceOf[A]).getOrElse(initial)
+
+        def unsafeSet(a: A): Unit =
+          Option(FiberContext.current.get()).foreach { fiberContext =>
+            fiberContext.fiberRefLocals.put(self.asInstanceOf[FiberRef[Any]], a)
+          }
       }
 
-      if (!threadLocalRef.compareAndSet(null, newCandidate)) getThreadLocal
-      else (newCandidate, true)
+      UnsafelyExposedFiberRefs.register(handle)
+      handle
     }
-  }
 }
 
 object FiberRef extends Serializable {
   trait UnsafeHandle[A] {
     def unsafeGet(): A
+    def unsafeSet(a: A): Unit
   }
 
   /**
