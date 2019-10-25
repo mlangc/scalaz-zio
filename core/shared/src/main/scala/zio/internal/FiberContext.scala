@@ -514,10 +514,12 @@ private[zio] final class FiberContext[E, A](
                 case ZIO.Tags.FiberRefModify =>
                   val zio = curZio.asInstanceOf[ZIO.FiberRefModify[Any, Any]]
 
-                  val oldValue           = Option(fiberRefLocals.get(zio.fiberRef))
+                  val oldValue = FiberRef
+                    .popPendingUnsafeSet(zio.fiberRef)
+                    .orElse(Option(fiberRefLocals.get(zio.fiberRef)))
+
                   val (result, newValue) = zio.f(oldValue.getOrElse(zio.fiberRef.initial))
                   fiberRefLocals.put(zio.fiberRef, newValue)
-                  zio.fiberRef.maybeThreadLocal.foreach(_.set(newValue))
 
                   curZio = nextInstr(result)
 
@@ -547,8 +549,10 @@ private[zio] final class FiberContext[E, A](
       }
     }
 
-    if (UnsafelyExposedFiberRefs.used)
+    if (UnsafelyExposedFiberRefs.used) {
+      FiberRef.popAllPendingUnsafeSets(fiberRefLocals.put)
       FiberContext.current.remove()
+    }
   }
 
   private[this] final def lock(executor: Executor): UIO[Unit] =

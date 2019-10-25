@@ -16,9 +16,9 @@
 
 package zio
 
-import java.util.concurrent.atomic.AtomicReference
+import java.util
 
-import zio.FiberRef.UnsafeHandle
+import zio.FiberRef.{ pendingUnsafeSets, UnsafeHandle }
 import zio.internal.FiberContext
 
 /**
@@ -52,8 +52,6 @@ import zio.internal.FiberContext
  */
 final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (A, A) => A) extends Serializable {
   self =>
-  private[zio] val threadLocalRef                           = new AtomicReference[ThreadLocal[A]](null)
-  private[zio] def maybeThreadLocal: Option[ThreadLocal[A]] = Option(threadLocalRef.get)
 
   /**
    * Reads the value associated with the current fiber. Returns initial value if
@@ -112,23 +110,33 @@ final class FiberRef[A](private[zio] val initial: A, private[zio] val combine: (
   }
 
   /**
-   * Returns a handle that can be used to read the value of this `FiberRef` from side effecting code.
+   * Returns a handle that can be used to interact with this `FiberRef` from side effecting code.
    *
-   * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data.
+   * This feature is meant to be used for integration with side effecting code, that needs to access fiber specific data,
+   * like MDC contexts and the like.
    */
   final def unsafeHandle: UIO[UnsafeHandle[A]] =
     ZIO.SetCurrentFiberContext *> ZIO.effectTotal {
 
       val handle = new UnsafeHandle[A] {
-        def unsafeGet(): A =
-          Option(FiberContext.current.get()).flatMap { fiberContext =>
-            Option(fiberContext.fiberRefLocals.get(self))
-          }.map(_.asInstanceOf[A]).getOrElse(initial)
+        def unsafeGet(): A = {
+          val fiberContext = FiberContext.current.get()
 
-        def unsafeSet(a: A): Unit =
-          Option(FiberContext.current.get()).foreach { fiberContext =>
-            fiberContext.fiberRefLocals.put(self.asInstanceOf[FiberRef[Any]], a)
-          }
+          Option {
+            if (fiberContext eq null) pendingUnsafeSets.get().get(self)
+            else fiberContext.fiberRefLocals.get(self)
+          }.map(_.asInstanceOf[A]).getOrElse(initial)
+        }
+
+        def unsafeSet(a: A): Unit = {
+          val fiberContext = FiberContext.current.get()
+          val fiberRef     = self.asInstanceOf[FiberRef[Any]]
+
+          if (fiberContext eq null) pendingUnsafeSets.get().put(fiberRef, a)
+          else fiberContext.fiberRefLocals.put(fiberRef, a)
+
+          ()
+        }
       }
 
       UnsafelyExposedFiberRefs.register(handle)
@@ -140,6 +148,29 @@ object FiberRef extends Serializable {
   trait UnsafeHandle[A] {
     def unsafeGet(): A
     def unsafeSet(a: A): Unit
+  }
+
+  import java.util.{ Map => JMap }
+
+  private val pendingUnsafeSets = new ThreadLocal[JMap[FiberRef[Any], Any]] {
+    override def initialValue(): JMap[FiberRef[Any], Any] = new util.HashMap(0)
+  }
+
+  private[zio] def popPendingUnsafeSet(fiberRef: FiberRef[Any]): Option[Any] =
+    Option(pendingUnsafeSets.get().remove(fiberRef))
+
+  private[zio] def popAllPendingUnsafeSets(f: (FiberRef[Any], Any) => _): Unit = {
+    val sets = pendingUnsafeSets.get()
+
+    if (!sets.isEmpty) {
+      val iter = sets.entrySet().iterator()
+      while (iter.hasNext) {
+        val entry = iter.next()
+        f(entry.getKey, entry.getValue)
+      }
+
+      sets.clear()
+    }
   }
 
   /**

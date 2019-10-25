@@ -1,5 +1,7 @@
 package zio
 
+import java.util.concurrent.atomic.AtomicReference
+
 import zio.FiberRefSpecUtil._
 import zio.clock.Clock
 import zio.duration._
@@ -300,7 +302,38 @@ object FiberRefSpec
               n       = 64
               results <- ZIO.reduceAllPar(test(1), 2.to(n).map(test))(_ && _)
             } yield results
-          }
+          },
+          testM("unsafe handles work when being passed to other fibers behind ZIOs back") {
+            for {
+              fiberRef <- FiberRef.make(0)
+
+              n         = 2
+              latch     <- Promise.make[Nothing, Unit]
+              handleRef <- UIO(new AtomicReference[FiberRef.UnsafeHandle[Int]]())
+
+              // We want a pass an unsafe handle to a fiber that doesn't yet
+              // know that there are unsafe handles, und thus did not set `FiberContext.current`
+              // and verify that interacting with the handle and the related fiber ref
+              // still works fine. We don't use a promise to pass the handle, because this would
+              // suspend and resume the fiber, und thus make sure that `FiberContext.current` is set.
+              unsafeSetAndGet = (i: Int) =>
+                latch.succeed(()) *>
+                  busyWaitForRef(handleRef).flatMap { handle =>
+                    UIO(handle.unsafeSet(i)) *> random.nextBoolean.flatMap {
+                      case true  => fiberRef.get
+                      case false => UIO(handle.unsafeGet())
+                    }.map(i -> _)
+                  }
+
+              worker <- ZIO.foreachPar(1.to(n))(unsafeSetAndGet).fork
+              _      <- latch.await
+              handle <- fiberRef.unsafeHandle
+              _      <- UIO(handleRef.set(handle))
+
+              results  <- ZIO.fromFiber(worker)
+              problems = results.filter(p => p._1 != p._2)
+            } yield assert(problems, isEmpty)
+          } @@ nonFlaky(1024) //<-- Even with a broken implementation, this test did not fail reliably with a lower number of repetitions
         )
       )
     )
@@ -309,6 +342,15 @@ object FiberRefSpecUtil {
   val (initial, update, update1, update2) = ("initial", "update", "update1", "update2")
   val looseTimeAndCpu: ZIO[Live[Clock], Nothing, (Int, Int)] = Live.live {
     ZIO.yieldNow.repeat(Schedule.spaced(Duration.fromNanos(1)) && Schedule.recurs(100))
+  }
+
+  def busyWaitForRef[A <: AnyRef](ref: AtomicReference[A]): UIO[A] = {
+    def loop(count: Int = 1): UIO[A] =
+      ZIO.fromOption(Option(ref.get())).orElse {
+        ZIO.when(count % 10000 == 0)(ZIO.yieldNow) *> loop(count + 1)
+      }
+
+    loop()
   }
 
   def setRefOrHandle(fiberRef: FiberRef[Int], value: Int): UIO[Unit] =
